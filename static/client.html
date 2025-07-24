@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Agent Client</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .status {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .transcript {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            min-height: 100px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .controls {
+            margin: 20px 0;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        #recordButton {
+            background-color: #dc3545;
+            color: white;
+        }
+        #recordButton:hover {
+            background-color: #c82333;
+        }
+        #recordButton.recording {
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        .message {
+            margin: 5px 0;
+            padding: 8px;
+            border-radius: 5px;
+        }
+        .user-message {
+            background-color: #e3f2fd;
+            margin-left: 20%;
+            margin-right: 5px;
+        }
+        .assistant-message {
+            background-color: #f3e5f5;
+            margin-right: 20%;
+            margin-left: 5px;
+        }
+        .system-message {
+            background-color: #fff3cd;
+            margin: 0 10%;
+            text-align: center;
+            font-style: italic;
+        }
+        .visualizer {
+            height: 60px;
+            width: 100%;
+            margin: 10px 0;
+            background-color: #000;
+            border-radius: 5px;
+        }
+        .audio-status {
+            margin: 10px 0;
+            padding: 8px;
+            background-color: #e9ecef;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Voice Agent Client</h1>
+        <div id="status" class="status disconnected">Disconnected</div>
+        
+        <div class="controls">
+            <button id="recordButton">Start Recording</button>
+            <button id="connectButton">Connect</button>
+            <button id="clearButton">Clear Transcript</button>
+        </div>
+
+        <canvas id="visualizer" class="visualizer"></canvas>
+        
+        <div class="audio-status" id="audioStatus">Audio Queue: 0 | Playing: No</div>
+        
+        <div class="transcript" id="transcript"></div>
+    </div>
+
+    <script>
+        let mediaRecorder;
+        let audioContext;
+        let analyser;
+        let ws;
+        let isRecording = false;
+        let isConnected = false;
+        
+        // Audio buffering system
+        let audioBufferQueue = [];
+        let isAudioPlaying = false;
+        let currentAudioSource = null;
+        const BUFFER_LOW_THRESHOLD = 2;
+        const BUFFER_HIGH_THRESHOLD = 10;
+        const BUFFER_PADDING_MS = 50;
+        let lastPlayedTime = 0;
+        let consecutiveEmptyBuffers = 0;
+        let audioChunkCount = 0;
+        let droppedChunkCount = 0;
+        
+        // For advanced buffering
+        let audioBufferCache = null;
+        const MERGE_THRESHOLD = 4;
+        const MIN_CHUNK_DURATION = 0.1;
+        
+        // For speech pattern detection
+        let lastAudioReceived = 0;
+        let isBuffering = false;
+        let silenceDetected = false;
+        const SPEECH_GAP_THRESHOLD = 1000;
+        
+        const recordButton = document.getElementById('recordButton');
+        const connectButton = document.getElementById('connectButton');
+        const clearButton = document.getElementById('clearButton');
+        const statusDiv = document.getElementById('status');
+        const transcriptDiv = document.getElementById('transcript');
+        const audioStatusDiv = document.getElementById('audioStatus');
+        const visualizer = document.getElementById('visualizer');
+        const canvasCtx = visualizer.getContext('2d');
+
+        // Update audio status display
+        function updateAudioStatus() {
+            audioStatusDiv.textContent = `Audio Queue: ${audioBufferQueue.length} | Playing: ${isAudioPlaying ? 'Yes' : 'No'}`;
+        }
+
+        // Set up WebSocket connection
+        connectButton.addEventListener('click', () => {
+            if (isConnected) {
+                // Disconnect if connected
+                if (ws) {
+                    ws.close();
+                }
+            } else {
+                // Connect if disconnected
+                connectWebSocket();
+            }
+        });
+
+        function connectWebSocket() {
+            // Simple WebSocket URL
+            const wsUrl = `ws://${window.location.hostname}:8000/audio-stream`;
+            console.log('Connecting to WebSocket at:', wsUrl);
+            
+            ws = new WebSocket(wsUrl);
+            
+            // Add connection error handling
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                statusDiv.textContent = 'Connection Error';
+                statusDiv.className = 'status disconnected';
+            };
+            
+            ws.onopen = () => {
+                isConnected = true;
+                statusDiv.textContent = 'Connected';
+                statusDiv.className = 'status connected';
+                connectButton.textContent = 'Disconnect';
+                // Create a new session when connected
+                ws.send(JSON.stringify({ 
+                    type: 'session.create',
+                    data: {
+                        mode: "text" // or "speech" if you want spoken responses
+                    }
+                }));
+                addMessage('system', 'Connected to voice agent');
+            };
+            
+            ws.onclose = () => {
+                isConnected = false;
+                statusDiv.textContent = 'Disconnected';
+                statusDiv.className = 'status disconnected';
+                connectButton.textContent = 'Connect';
+                clearAudioQueue();
+                addMessage('system', 'Disconnected from voice agent');
+            };
+            
+            ws.onmessage = handleWebSocketMessage;
+        }
+
+        // Handle incoming messages
+        function handleWebSocketMessage(event) {
+            const data = JSON.parse(event.data);
+            console.log('Received message:', data.type || data.event);
+            
+            switch(data.type || data.event) {
+                case 'text':
+                case 'response':
+                    if (data.text) {
+                        addMessage('assistant', data.text);
+                    }
+                    if (data.audio) {
+                        console.log('Received audio data, length:', data.audio.length);
+                        playAudio(data.audio);
+                    }
+                    break;
+                case 'transcript':
+                    addMessage('user', data.text);
+                    break;
+                case 'audio':
+                    console.log('Received audio data, length:', data.audio ? data.audio.length : 0);
+                    playAudio(data.audio);
+                    break;
+                case 'interruption':
+                case 'start_interruption':
+                    // Clear audio queue on interruption
+                    clearAudioQueue();
+                    console.log('Interruption detected, cleared audio queue');
+                    addMessage('system', 'Audio interrupted');
+                    break;
+                case 'error':
+                    console.error('Error:', data.message);
+                    addMessage('system', `Error: ${data.message}`);
+                    break;
+                case 'connection_ready':
+                    console.log('Connection ready:', data.message);
+                    addMessage('system', data.message);
+                    break;
+                default:
+                    console.log('Unhandled message type:', data.type || data.event, data);
+            }
+        }
+
+        // Add message to transcript
+        function addMessage(sender, text) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}-message`;
+            messageDiv.textContent = text;
+            transcriptDiv.appendChild(messageDiv);
+            transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
+        }
+
+        // Clear transcript
+        clearButton.addEventListener('click', () => {
+            transcriptDiv.innerHTML = '';
+            clearAudioQueue();
+        });
+
+        // Clear audio queue
+        function clearAudioQueue() {
+            audioBufferQueue = [];
+            audioBufferCache = null;
+            
+            if (currentAudioSource) {
+                try {
+                    currentAudioSource.stop();
+                } catch (e) {
+                    console.log('Audio source already stopped');
+                }
+                currentAudioSource = null;
+            }
+            
+            isAudioPlaying = false;
+            lastPlayedTime = 0;
+            consecutiveEmptyBuffers = 0;
+            isBuffering = false;
+            silenceDetected = false;
+            
+            updateAudioStatus();
+            console.log('Audio queue cleared');
+        }
+
+        // Play received audio with proper queue management
+        function playAudio(base64Audio) {
+            try {
+                if (!audioContext) {
+                    audioContext = new AudioContext({ sampleRate: 8000 });
+                }
+
+                // Decode base64 audio data
+                const audioData = atob(base64Audio);
+                const audioArray = new Uint8Array(audioData.length);
+                for (let i = 0; i < audioData.length; i++) {
+                    audioArray[i] = audioData.charCodeAt(i);
+                }
+                
+                // Add to queue
+                addToAudioBufferQueue(audioArray);
+                
+                // Start playing if not already playing
+                if (!isAudioPlaying && audioBufferQueue.length >= BUFFER_LOW_THRESHOLD) {
+                    playNextAudioBuffer();
+                }
+                
+            } catch (error) {
+                console.error('Error processing audio:', error);
+            }
+        }
+
+        // Add audio to buffer queue with management
+        function addToAudioBufferQueue(audioArray) {
+            audioBufferQueue.push(audioArray);
+            audioChunkCount++;
+            
+            // Prevent queue overflow
+            if (audioBufferQueue.length > BUFFER_HIGH_THRESHOLD) {
+                audioBufferQueue.shift();
+                droppedChunkCount++;
+                console.log('Dropped audio chunk to prevent overflow');
+            }
+            
+            updateAudioStatus();
+        }
+
+        // Play next audio buffer in queue
+        function playNextAudioBuffer() {
+            if (audioBufferQueue.length === 0) {
+                consecutiveEmptyBuffers++;
+                
+                if (consecutiveEmptyBuffers >= 5) {
+                    isAudioPlaying = false;
+                    updateAudioStatus();
+                    return;
+                }
+                
+                // Wait and try again
+                setTimeout(() => {
+                    playNextAudioBuffer();
+                }, 100);
+                return;
+            }
+            
+            consecutiveEmptyBuffers = 0;
+            isAudioPlaying = true;
+            updateAudioStatus();
+            
+            const audioArray = audioBufferQueue.shift();
+            
+            // Stop any currently playing audio
+            if (currentAudioSource) {
+                try {
+                    currentAudioSource.stop();
+                } catch (e) {
+                    console.log('Previous audio source already stopped');
+                }
+                currentAudioSource = null;
+            }
+            
+            playAudioWithWebAudio(audioArray);
+        }
+
+        // Play audio using Web Audio API
+        async function playAudioWithWebAudio(audioData) {
+            try {
+                if (!audioContext) {
+                    audioContext = new AudioContext({ sampleRate: 8000 });
+                }
+                
+                // Resume audio context if suspended
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                }
+                
+                // Decode g711_ulaw to PCM
+                const pcmData = new Float32Array(audioData.length);
+                for (let i = 0; i < audioData.length; i++) {
+                    pcmData[i] = ulawToLinear(audioData[i]) / 32768.0;
+                }
+                
+                // Create audio buffer at 8kHz
+                const audioBuffer = audioContext.createBuffer(1, pcmData.length, 8000);
+                const channelData = audioBuffer.getChannelData(0);
+                channelData.set(pcmData);
+                
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                
+                // Add compression for better audio quality
+                const compressor = audioContext.createDynamicsCompressor();
+                compressor.threshold.value = -24;
+                compressor.knee.value = 30;
+                compressor.ratio.value = 12;
+                compressor.attack.value = 0.003;
+                compressor.release.value = 0.25;
+                
+                source.connect(compressor);
+                compressor.connect(audioContext.destination);
+                
+                // Set up event handler for when audio ends
+                source.onended = () => {
+                    currentAudioSource = null;
+                    // Play next audio buffer after current one ends
+                    setTimeout(() => {
+                        playNextAudioBuffer();
+                    }, BUFFER_PADDING_MS);
+                };
+                
+                currentAudioSource = source;
+                
+                // Calculate timing for smooth playback
+                const now = audioContext.currentTime;
+                const timeSinceLastPlay = now - lastPlayedTime;
+                
+                if (timeSinceLastPlay > 0.5 || silenceDetected) {
+                    lastPlayedTime = now;
+                    silenceDetected = false;
+                }
+                
+                const startTime = Math.max(now, lastPlayedTime);
+                source.start(startTime);
+                
+                lastPlayedTime = startTime + audioBuffer.duration;
+                
+                console.log('Playing g711_ulaw audio at 8kHz');
+                
+            } catch (error) {
+                console.error('Web Audio API playback failed:', error);
+                currentAudioSource = null;
+                // Continue with next buffer even if current one fails
+                setTimeout(() => {
+                    playNextAudioBuffer();
+                }, 100);
+            }
+        }
+        
+        // Convert μ-law to linear PCM
+        function ulawToLinear(ulaw) {
+            ulaw = ~ulaw;
+            const sign = (ulaw & 0x80) ? -1 : 1;
+            const exponent = (ulaw >> 4) & 0x07;
+            const mantissa = ulaw & 0x0F;
+            
+            let sample = (mantissa << (exponent + 3)) + (0x84 << exponent);
+            if (exponent === 0) sample += 0x84;
+            
+            return sign * (sample - 0x84);
+        }
+
+        // Convert linear PCM to μ-law
+        function linearToUlaw(pcm) {
+            const BIAS = 0x84;
+            const CLIP = 32635;
+            
+            let sign = (pcm >> 8) & 0x80;
+            if (sign !== 0) pcm = -pcm;
+            if (pcm > CLIP) pcm = CLIP;
+            
+            pcm += BIAS;
+            let exponent = 7;
+            let expMask = 0x4000;
+            
+            for (let i = 0; i < 8; i++) {
+                if ((pcm & expMask) !== 0) break;
+                exponent--;
+                expMask >>= 1;
+            }
+            
+            const mantissa = (pcm >> (exponent + 3)) & 0x0F;
+            const ulaw = ~(sign | (exponent << 4) | mantissa);
+            
+            return ulaw & 0xFF;
+        }
+
+        // Set up audio recording using Web Audio API for better control
+        async function setupAudioRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    audio: {
+                        sampleRate: 8000,  // Use 8kHz for g711_ulaw compatibility
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true
+                    }
+                });
+                
+                audioContext = new AudioContext({ sampleRate: 8000 });
+                analyser = audioContext.createAnalyser();
+                const source = audioContext.createMediaStreamSource(stream);
+                source.connect(analyser);
+                
+                // Create a ScriptProcessorNode for real-time audio processing
+                const processor = audioContext.createScriptProcessor(1024, 1, 1);
+                source.connect(processor);
+                processor.connect(audioContext.destination);
+                
+                processor.onaudioprocess = (event) => {
+                    if (isRecording && ws && ws.readyState === WebSocket.OPEN) {
+                        const inputBuffer = event.inputBuffer;
+                        const inputData = inputBuffer.getChannelData(0);
+                        
+                        // Convert float32 audio to g711_ulaw format
+                        const ulawData = new Uint8Array(inputData.length);
+                        for (let i = 0; i < inputData.length; i++) {
+                            // Convert from [-1, 1] to 16-bit PCM first
+                            const pcm = Math.max(-32768, Math.min(32767, inputData[i] * 32767));
+                            // Convert PCM to μ-law
+                            ulawData[i] = linearToUlaw(pcm);
+                        }
+                        
+                        // Convert to base64
+                        const base64Audio = btoa(String.fromCharCode(...ulawData));
+                        
+                        // Send to server
+                        ws.send(JSON.stringify({ 
+                            type: 'audio',
+                            audio: base64Audio
+                        }));
+                    }
+                };
+                
+                // Store processor for cleanup
+                window.audioProcessor = processor;
+
+                setupVisualizer();
+                return true;
+            } catch (err) {
+                console.error('Error accessing microphone:', err);
+                return false;
+            }
+        }
+
+        // Set up audio visualizer
+        function setupVisualizer() {
+            if (!analyser) return;
+            
+            analyser.fftSize = 2048;
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            
+            canvasCtx.clearRect(0, 0, visualizer.width, visualizer.height);
+            
+            function draw() {
+                const WIDTH = visualizer.width;
+                const HEIGHT = visualizer.height;
+
+                requestAnimationFrame(draw);
+
+                analyser.getByteTimeDomainData(dataArray);
+
+                canvasCtx.fillStyle = 'rgb(200, 200, 200)';
+                canvasCtx.fillRect(0, 0, WIDTH, HEIGHT);
+
+                canvasCtx.lineWidth = 2;
+                canvasCtx.strokeStyle = 'rgb(0, 0, 0)';
+                canvasCtx.beginPath();
+
+                const sliceWidth = WIDTH * 1.0 / bufferLength;
+                let x = 0;
+
+                for(let i = 0; i < bufferLength; i++) {
+                    const v = dataArray[i] / 128.0;
+                    const y = v * HEIGHT/2;
+
+                    if(i === 0) {
+                        canvasCtx.moveTo(x, y);
+                    } else {
+                        canvasCtx.lineTo(x, y);
+                    }
+
+                    x += sliceWidth;
+                }
+
+                canvasCtx.lineTo(visualizer.width, visualizer.height/2);
+                canvasCtx.stroke();
+            }
+
+            draw();
+        }
+
+        // Handle recording button
+        recordButton.addEventListener('click', async () => {
+            if (!isConnected) {
+                alert('Please connect to the server first');
+                return;
+            }
+
+            if (!window.audioProcessor) {
+                const success = await setupAudioRecording();
+                if (!success) {
+                    alert('Could not access microphone');
+                    return;
+                }
+            }
+
+            if (isRecording) {
+                // Stop recording
+                isRecording = false;
+                recordButton.textContent = 'Start Recording';
+                recordButton.classList.remove('recording');
+                
+                // Send commit to finish the audio buffer
+                ws.send(JSON.stringify({ 
+                    type: 'input_audio_buffer.commit'
+                }));
+                
+                // Request a response from the server
+                ws.send(JSON.stringify({ 
+                    type: 'response.create'
+                }));
+                
+                console.log('Stopped recording and requested response');
+                addMessage('system', 'Recording stopped, processing...');
+            } else {
+                // Clear any existing audio buffer and playback before starting
+                clearAudioQueue();
+                
+                ws.send(JSON.stringify({ 
+                    type: 'input_audio_buffer.clear'
+                }));
+                
+                // Start recording
+                isRecording = true;
+                recordButton.textContent = 'Stop Recording';
+                recordButton.classList.add('recording');
+                
+                console.log('Started recording');
+                addMessage('system', 'Recording started...');
+            }
+        });
+
+        // Handle window resize for visualizer
+        window.addEventListener('resize', () => {
+            visualizer.width = visualizer.offsetWidth;
+            visualizer.height = visualizer.offsetHeight;
+        });
+
+        // Handle window unload
+        window.addEventListener('beforeunload', () => {
+            clearAudioQueue();
+            if (ws) {
+                ws.close();
+            }
+        });
+
+        // Initial setup
+        visualizer.width = visualizer.offsetWidth;
+        visualizer.height = visualizer.offsetHeight;
+
+        // Initialize audio status
+        updateAudioStatus();
+    </script>
+</body>
+</html>
