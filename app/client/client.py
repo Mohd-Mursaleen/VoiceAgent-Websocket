@@ -85,8 +85,9 @@ class OpenAIWebSocketClient:
 
     def _get_session_config(self) -> Dict[str, Any]:
         """Get the session configuration dictionary with hardcoded tools."""
-        # Hardcoded tools - simplify for now
-        tools = []  # Removing tools to simplify troubleshooting
+        from app.tools.iot_tools import tools
+
+        tools = tools  # Removing tools to simplify troubleshooting
         
         # Improved prompt for better voice agent behavior
         default_prompt = """

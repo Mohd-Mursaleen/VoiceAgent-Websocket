@@ -250,19 +250,40 @@ class OpenAIMessageHandler:
             
             logger.info(f"Function call from realtime API - Name: {function_name}, ID: {call_id}")
             
-            if call_id:
-                result = {
-                    "status": "success",
-                    "message": f"Function {function_name} called, but tools are not implemented yet"
-                }
+            if call_id and function_name:
+                try:
+                    # Import and execute the actual function
+                    from app.tools.iot_tools import execute_function
+                    
+                    # Execute the function (this will make the HTTP request)
+                    function_result = execute_function(function_name)
+                    
+                    result = {
+                        "status": "success",
+                        "result": function_result
+                    }
+                    
+                    logger.info(f"Function {function_name} executed with result: {function_result}")
+                    
+                except Exception as func_error:
+                    logger.error(f"Error executing function {function_name}: {func_error}")
+                    result = {
+                        "status": "error",
+                        "error": str(func_error)
+                    }
                 
                 await send_tool_result(self.openai_client, call_id, result)
-                logger.info(f"Sent placeholder result for function {function_name}")
+                logger.info(f"Sent result for function {function_name}: {result}")
             else:
-                logger.warning(f"No call_id found in function call response")
+                logger.warning(f"Missing call_id or function_name in function call response")
                 
         except Exception as e:
             logger.error(f"Error in _handle_function_call: {e}", exc_info=True)
+            if 'call_id' in locals() and call_id:
+                await send_tool_result(self.openai_client, call_id, {
+                    "status": "error", 
+                    "error": str(e)
+                })
 
     async def _handle_error(self, response: dict):
         """Handle error responses from OpenAI."""
