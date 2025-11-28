@@ -3,10 +3,11 @@ from dataclasses import dataclass
 from typing import Optional
 import time
 
+
 @dataclass
 class StreamState:
     """Manages the state of an audio stream connection.
-    
+
     This class maintains the current state of an audio stream session, tracking important
     timestamps and conversation state for managing the interaction between user and assistant.
 
@@ -18,6 +19,7 @@ class StreamState:
         is_assistant_speaking (bool): Flag indicating if the assistant is currently speaking
         media_count (int): Counter for tracking the number of media chunks processed
     """
+
     latest_timestamp: int = 0
     last_assistant_item: Optional[str] = None
     response_start_time: Optional[int] = None
@@ -31,7 +33,7 @@ class StreamState:
 
     def reset(self):
         """Reset stream state for new connection.
-        
+
         Clears all state variables to their initial values, preparing the state
         for a new stream session.
         """

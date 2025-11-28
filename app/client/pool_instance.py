@@ -9,12 +9,15 @@ logger = logging.getLogger(__name__)
 # Create a singleton instance of the client pool
 client_pool = OpenAIClientPool(
     min_connections=int(os.getenv("MIN_CONNECTIONS", "2")),
-    max_connections=int(os.getenv("MAX_CONNECTIONS", "5"))
+    max_connections=int(os.getenv("MAX_CONNECTIONS", "5")),
 )
 
 # Set up a recurring health check task
 health_check_task = None
-health_check_interval = int(os.getenv("HEALTH_CHECK_INTERVAL", "300"))  # Default: 5 minutes
+health_check_interval = int(
+    os.getenv("HEALTH_CHECK_INTERVAL", "300")
+)  # Default: 5 minutes
+
 
 async def periodic_health_check():
     """Perform periodic health checks on the client pool."""
@@ -34,17 +37,18 @@ async def periodic_health_check():
         # Restart the task if unexpected error occurs
         schedule_health_check()
 
+
 def schedule_health_check():
     """Schedule the periodic health check task."""
     global health_check_task
-    
+
     # Cancel existing task if needed
     if health_check_task and not health_check_task.done():
         health_check_task.cancel()
-    
-    # Create a new health check task    
+
+    # Create a new health check task
     health_check_task = asyncio.create_task(periodic_health_check())
     logger.info(f"Scheduled health check task (every {health_check_interval} seconds)")
-    
+
     # Don't wait for task completion
-    return health_check_task 
+    return health_check_task
