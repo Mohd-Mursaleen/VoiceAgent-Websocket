@@ -125,12 +125,12 @@ async def websocket_endpoint(websocket: WebSocket):
                         break
 
                     try:
-                        # More aggressive polling
-                        for _ in range(5):  # Process multiple messages if available
+                        # Process messages with reduced polling frequency
+                        for _ in range(2):  # Process up to 2 messages per iteration
                             try:
                                 response = await asyncio.wait_for(
                                     openai_client.receive_message(),
-                                    timeout=0.01,  # Short timeout for more responsive polling
+                                    timeout=0.05,  # Increased timeout to reduce CPU usage
                                 )
                                 await openai_handler.process_response(response)
                             except asyncio.TimeoutError:
@@ -143,8 +143,8 @@ async def websocket_endpoint(websocket: WebSocket):
                         logger.error(f"Error processing OpenAI message: {e}")
 
                     await asyncio.sleep(
-                        0.01
-                    )  # Prevent CPU spinning but keep responsive
+                        0.05
+                    )  # Increased sleep interval to reduce CPU usage
             except Exception as e:
                 logger.error(f"Error in process_openai_messages: {e}")
                 raise

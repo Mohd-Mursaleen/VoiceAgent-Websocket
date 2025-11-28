@@ -23,7 +23,7 @@ class OpenAIWebSocketClient:
 
     def __init__(self):
         self.websocket: Optional[WebSocketClientProtocol] = None
-        self._ws_url = "wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview-2024-12-17"
+        self._ws_url = "wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview"
         self._headers = {
             "Authorization": f"Bearer {OPENAI_API_KEY}",
             "OpenAI-Beta": "realtime=v1",
@@ -51,7 +51,7 @@ class OpenAIWebSocketClient:
         """Establish WebSocket connection and initialize session with OpenAI."""
         try:
             logger.info(f"Connecting to OpenAI at {self._ws_url}")
-            logger.info("Using model: gpt-4o-mini-realtime-preview-2024-12-17")
+            logger.info("Using model: gpt-4o-mini-realtime-preview")
 
             # Use longer ping interval and timeout for more stability
             self.websocket = await websockets.connect(
@@ -79,7 +79,7 @@ class OpenAIWebSocketClient:
         session_config = self._get_session_config()
         try:
             logger.info(
-                f"Initializing session with gpt-4o-mini-realtime-preview-2024-12-17 model"
+                f"Initializing session with gpt-4o-mini-realtime-preview model"
             )
             await self.send(session_config)
             logger.info("Session initialized with OpenAI")
@@ -104,7 +104,7 @@ You are "Sara," an intelligent, friendly, and efficient smart home voice assista
 
 # Greeting Protocol
 - **First Interaction:** Start the session immediately with:
-  "Hello Mohammad, my name is Sara. How can I help you today?"
+  "Hello Sir, my name is Sara. How can I help you today?"
 
   <non-negotiable> Always after doing some task ask : is there anything else i can help you with today sir? </non-negotiable>
 # Interaction Flow (Strict)
@@ -163,7 +163,7 @@ YOUR MAIN GOAL:
                 "modalities": ["text", "audio"],
                 "temperature": 0.7,
                 "tools": tools,
-                "model": "gpt-4o-mini-realtime-preview-2024-12-17",
+                "model": "gpt-4o-mini-realtime-preview",
             },
         }
 
